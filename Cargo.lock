@@ -760,9 +760,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.93"
+version = "1.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c95c10ba0b00a02636238b814946408b1322d5ac4760326e6fb8ec956d85775"
+checksum = "34ac096ce696dc2fcabef30516bb13c0a68a11d30131d3df6f04711467681b04"
 
 [[package]]
 name = "aptos-aggregator"
@@ -1363,9 +1363,11 @@ dependencies = [
  "hex",
  "ibc-union-light-client",
  "ibc-union-msg",
+ "serde",
  "serde_json",
  "thiserror",
  "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -2239,6 +2241,7 @@ dependencies = [
  "tendermint-verifier",
  "thiserror",
  "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -3118,6 +3121,7 @@ dependencies = [
  "serde",
  "serde-utils",
  "serde_json",
+ "thiserror",
  "tokio",
  "tracing",
  "unionlabs",
@@ -3172,6 +3176,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -3358,6 +3363,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosmos-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bip32",
+ "cometbft-rpc",
+ "num-rational 0.4.2",
+ "protos",
+ "serde",
+ "serde_json",
+ "sha2 0.10.8",
+ "tokio",
+ "tracing",
+ "unionlabs",
+]
+
+[[package]]
 name = "cosmos-sdk-event"
 version = "0.0.0"
 dependencies = [
@@ -3410,6 +3432,32 @@ dependencies = [
  "rayon",
  "sha2 0.10.8",
  "thiserror",
+]
+
+[[package]]
+name = "cosmwasm-deployer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bip32",
+ "clap 4.5.4",
+ "cometbft-rpc",
+ "cosmwasm-std 2.1.4",
+ "hex-literal",
+ "ibc-union-light-client",
+ "ibc-union-msg",
+ "ibc-union-ucs03-zkgm",
+ "num-rational 0.4.2",
+ "protos",
+ "serde",
+ "serde_json",
+ "sha2 0.10.8",
+ "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.18",
+ "ucs03-zkgm-token-minter-api",
+ "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -4429,6 +4477,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 name = "drip"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "async-graphql",
  "async-graphql-axum",
  "async-sqlite",
@@ -4437,6 +4486,7 @@ dependencies = [
  "chrono",
  "clap 4.5.4",
  "cometbft-rpc",
+ "cosmos-client",
  "prost 0.12.6",
  "protos",
  "recaptcha-verify",
@@ -4792,6 +4842,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -4833,6 +4884,29 @@ dependencies = [
  "fixed-hash 0.8.0",
  "primitive-types 0.12.2",
  "uint",
+]
+
+[[package]]
+name = "ethermint-light-client"
+version = "0.0.0"
+dependencies = [
+ "base64 0.21.7",
+ "cometbft-types",
+ "cosmwasm-std 2.1.4",
+ "ethereum-light-client",
+ "ethermint-light-client-types",
+ "ibc-union-light-client",
+ "ibc-union-msg",
+ "ics23",
+ "lazy_static",
+ "serde",
+ "serde_json",
+ "tendermint-light-client",
+ "tendermint-light-client-types",
+ "tendermint-verifier",
+ "thiserror",
+ "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -6194,6 +6268,7 @@ dependencies = [
  "strum 0.26.3",
  "thiserror",
  "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -6210,27 +6285,7 @@ dependencies = [
  "serde-utils",
  "thiserror",
  "unionlabs",
-]
-
-[[package]]
-name = "ibc-union-movement-lc"
-version = "0.0.0"
-dependencies = [
- "aptos-crypto",
- "aptos-types",
- "aptos-verifier",
- "bcs 0.1.6",
- "cosmwasm-std 2.1.4",
- "evm-storage-verifier",
- "hex-literal",
- "ibc-union-light-client",
- "ibc-union-msg",
- "movement-light-client-types",
- "rlp",
- "serde",
- "serde-utils",
- "thiserror",
- "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -7822,6 +7877,28 @@ dependencies = [
  "smallbitvec",
  "smallvec",
  "triomphe",
+]
+
+[[package]]
+name = "movement-light-client"
+version = "0.0.0"
+dependencies = [
+ "aptos-crypto",
+ "aptos-types",
+ "aptos-verifier",
+ "bcs 0.1.6",
+ "cosmwasm-std 2.1.4",
+ "evm-storage-verifier",
+ "hex-literal",
+ "ibc-union-light-client",
+ "ibc-union-msg",
+ "movement-light-client-types",
+ "rlp",
+ "serde",
+ "serde-utils",
+ "thiserror",
+ "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -11367,6 +11444,7 @@ dependencies = [
  "state-lens-light-client-types",
  "thiserror",
  "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -11769,6 +11847,7 @@ dependencies = [
  "tendermint-verifier",
  "thiserror",
  "unionlabs",
+ "unionlabs-cosmwasm-upgradable",
 ]
 
 [[package]]
@@ -12842,6 +12921,15 @@ dependencies = [
  "typenum",
  "unionlabs-primitives",
  "wasmparser",
+]
+
+[[package]]
+name = "unionlabs-cosmwasm-upgradable"
+version = "0.0.0"
+dependencies = [
+ "cosmwasm-std 2.1.4",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
