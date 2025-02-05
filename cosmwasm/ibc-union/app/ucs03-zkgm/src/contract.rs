@@ -29,7 +29,7 @@ use crate::{
         ZkgmPacket, ACK_ERR_ONLY_MAKER, FILL_TYPE_MARKETMAKER, FILL_TYPE_PROTOCOL, OP_BATCH,
         OP_FUNGIBLE_ASSET_ORDER, OP_MULTIPLEX, TAG_ACK_FAILURE, TAG_ACK_SUCCESS, ZKGM_VERSION_0,
     },
-    msg::{EurekaMsg, ExecuteMsg, InitMsg},
+    msg::{EurekaMsg, ExecuteMsg, InitMsg, QueryMsg},
     state::{
         CHANNEL_BALANCE, CONFIG, EXECUTING_PACKET, EXECUTION_ACK, HASH_TO_FOREIGN_TOKEN,
         TOKEN_MINTER, TOKEN_ORIGIN,
@@ -1092,4 +1092,19 @@ fn make_wasm_msg(
 ) -> StdResult<CosmosMsg> {
     let msg = msg.into();
     Ok(CosmosMsg::Wasm(wasm_execute(minter, &msg, funds)?))
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn query(_: Deps, _: Env, msg: QueryMsg) -> Result<Binary, ContractError> {
+    match msg {
+        QueryMsg::PredictWrappedDenom {
+            path,
+            channel,
+            token,
+        } => Ok(to_json_binary(&predict_wrapped_denom(
+            path.parse().map_err(ContractError::InvalidPath)?,
+            channel,
+            token,
+        ))?),
+    }
 }

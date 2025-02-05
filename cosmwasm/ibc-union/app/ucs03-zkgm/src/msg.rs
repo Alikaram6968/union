@@ -67,3 +67,16 @@ pub enum EurekaMsg {
 
 #[cw_serde]
 pub struct MigrateMsg {}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryMsg {
+    /// Calculate the wrapped token denom
+    PredictWrappedDenom {
+        path: String,
+        /// Destination channel id
+        channel: u32,
+        /// Base token denom
+        token: Bytes,
+    },
+}
