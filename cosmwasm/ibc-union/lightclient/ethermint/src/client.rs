@@ -2,7 +2,7 @@ use cometbft_types::crypto::public_key::PublicKey;
 use cosmwasm_std::Empty;
 use ethermint_light_client_types::ClientState;
 use ibc_union_light_client::{IbcClient, IbcClientCtx, IbcClientError};
-use ibc_union_msg::lightclient::Status;
+use ibc_union_msg::lightclient::{Status, VerifyCreationResponseEvent};
 use ics23::ibc_api::SDK_SPECS;
 use tendermint_light_client::verifier::Ed25519Verifier;
 use tendermint_light_client_types::{ConsensusState, Header};
@@ -179,7 +179,7 @@ impl IbcClient for EthermintLightClient {
     fn verify_creation(
         _client_state: &Self::ClientState,
         _consensus_state: &Self::ConsensusState,
-    ) -> Result<(), IbcClientError<Self>> {
-        Ok(())
+    ) -> Result<Option<Vec<VerifyCreationResponseEvent>>, IbcClientError<Self>> {
+        Ok(None)
     }
 }

@@ -5,6 +5,7 @@ use clap::Parser;
 use cometbft_rpc::rpc_types::GrpcAbciQueryError;
 use cosmos_client::{Ctx, GasConfig};
 use cosmwasm_std::Addr;
+use hex_literal::hex;
 use protos::cosmwasm::wasm::v1::{
     MsgInstantiateContract2, MsgInstantiateContract2Response, MsgMigrateContract,
     MsgMigrateContractResponse, MsgStoreCode, MsgStoreCodeResponse,
@@ -32,7 +33,7 @@ enum App {
         #[arg(long)]
         contracts: PathBuf,
         #[arg(long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
         #[command(flatten)]
         gas_config: GasConfigArgs,
     },
@@ -46,7 +47,7 @@ enum App {
         #[command(flatten)]
         apps: AppFlags,
         #[arg(long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
     },
     InitHeights {
         #[arg(long)]
@@ -55,7 +56,7 @@ enum App {
         #[arg(long)]
         addresses: PathBuf,
         #[arg(long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
     },
     #[clap(subcommand)]
     Tx(TxCmd),
@@ -249,13 +250,14 @@ async fn do_main() -> Result<()> {
                 );
             }
 
-            let contract_addresses = ContractAddresses {
-                core,
-                lightclient,
-                app,
-            };
-
-            std::fs::write(output, serde_json::to_string(&contract_addresses).unwrap())?;
+            write_output(
+                output,
+                ContractAddresses {
+                    core,
+                    lightclient,
+                    app,
+                },
+            )?;
         }
         App::DeployFull {
             rpc_url,
@@ -415,7 +417,7 @@ async fn do_main() -> Result<()> {
                 contract_addresses.app.ucs03 = Some(address);
             }
 
-            std::fs::write(output, serde_json::to_string(&contract_addresses).unwrap())?;
+            write_output(output, contract_addresses)?;
         }
         App::InitHeights {
             rpc_url,
@@ -426,7 +428,14 @@ async fn do_main() -> Result<()> {
                 &std::fs::read(addresses).context("reading addresses path")?,
             )?;
 
-            let ctx = Deployer(Ctx::new(rpc_url, H256::default(), GasConfig::default()).await?);
+            let ctx = Deployer(
+                Ctx::new(
+                    rpc_url,
+                    hex!("9a95f0bb285a5d81415a0571cebbb63dbef2c7a0c90f9b60a40572552da3eac3").into(),
+                    GasConfig::default(),
+                )
+                .await?,
+            );
 
             let mut heights = BTreeMap::new();
 
@@ -469,7 +478,7 @@ async fn do_main() -> Result<()> {
                 heights.insert(address, height);
             }
 
-            std::fs::write(output, serde_json::to_string(&heights).unwrap())?;
+            write_output(output, heights)?;
         }
         App::Tx(tx_cmd) => match tx_cmd {
             TxCmd::StoreCode {
@@ -583,12 +592,18 @@ async fn do_main() -> Result<()> {
     Ok(())
 }
 
-// struct Ctx {
-//     signer: CosmosSigner,
-//     client: cometbft_rpc::Client,
-//     gas_config: GasConfig,
-//     chain_id: String,
-// }
+fn write_output(path: Option<PathBuf>, data: impl Serialize) -> Result<()> {
+    let data = serde_json::to_string(&data).unwrap();
+
+    match path {
+        Some(output) => {
+            std::fs::write(output, data)?;
+        }
+        None => println!("{data}"),
+    }
+
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Default, clap::Args)]
 pub struct GasConfigArgs {
