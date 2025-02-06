@@ -1,38 +1,24 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{collections::BTreeMap, ops::Deref, path::PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
-use cometbft_rpc::rpc_types::{GrpcAbciQueryError, TxResponse};
+use cometbft_rpc::rpc_types::GrpcAbciQueryError;
+use cosmos_client::{Ctx, GasConfig};
 use cosmwasm_std::Addr;
-use ibc_union_ucs03_zkgm::msg::TokenMinterInitMsg;
-use protos::{
-    cosmos::base::abci,
-    cosmwasm::wasm::v1::{
-        MsgInstantiateContract2, MsgInstantiateContract2Response, MsgMigrateContract,
-        MsgMigrateContractResponse, MsgStoreCode, MsgStoreCodeResponse,
-    },
+use protos::cosmwasm::wasm::v1::{
+    MsgInstantiateContract2, MsgInstantiateContract2Response, MsgMigrateContract,
+    MsgMigrateContractResponse, MsgStoreCode, MsgStoreCodeResponse,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Digest;
-use tracing::{debug, info, instrument};
+use tracing::{info, instrument};
 use tracing_subscriber::EnvFilter;
+use ucs03_zkgm::msg::TokenMinterInitMsg;
 use unionlabs::{
     bech32::Bech32,
-    cosmos::{
-        auth::base_account::BaseAccount,
-        base::{abci::gas_info::GasInfo, coin::Coin},
-        crypto::{secp256k1, AnyPubKey},
-        tx::{
-            auth_info::AuthInfo, fee::Fee, mode_info::ModeInfo, sign_doc::SignDoc,
-            signer_info::SignerInfo, signing::sign_info::SignMode, tx::Tx, tx_body::TxBody,
-            tx_raw::TxRaw,
-        },
-    },
-    encoding::{EncodeAs, Proto},
-    google::protobuf::any::Any,
+    cosmos::{base::coin::Coin, tx::fee::Fee},
     primitives::{Bytes, H256},
-    prost::{Message, Name},
     signer::CosmosSigner,
 };
 
@@ -48,7 +34,7 @@ enum App {
         #[arg(long)]
         output: PathBuf,
         #[command(flatten)]
-        gas_config: GasConfig,
+        gas_config: GasConfigArgs,
     },
     Addresses {
         #[arg(long)]
@@ -59,6 +45,15 @@ enum App {
         lightclient: Vec<String>,
         #[command(flatten)]
         apps: AppFlags,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    InitHeights {
+        #[arg(long)]
+        rpc_url: String,
+        /// output of `cosmwasm-deployer addresses`
+        #[arg(long)]
+        addresses: PathBuf,
         #[arg(long)]
         output: PathBuf,
     },
@@ -88,7 +83,7 @@ enum TxCmd {
         #[arg(long)]
         bytecode_path: String,
         #[command(flatten)]
-        gas_config: GasConfig,
+        gas_config: GasConfigArgs,
     },
     Instantiate2 {
         #[arg(long)]
@@ -102,7 +97,7 @@ enum TxCmd {
         #[arg(long)]
         msg: String,
         #[command(flatten)]
-        gas_config: GasConfig,
+        gas_config: GasConfigArgs,
     },
 }
 
@@ -219,6 +214,7 @@ async fn do_main() -> Result<()> {
             )
             .unwrap()
             .to_string();
+
             let lightclient = lightclients
                 .into_iter()
                 .map(|salt| {
@@ -272,7 +268,7 @@ async fn do_main() -> Result<()> {
                 &std::fs::read(contracts).context("reading contracts path")?,
             )?;
 
-            let ctx = Ctx::new(rpc_url, private_key, gas_config).await?;
+            let ctx = Deployer(Ctx::new(rpc_url, private_key, gas_config.into()).await?);
 
             let bytecode_base_address = ctx
                 .instantiate2_address(sha2(BYTECODE_BASE_BYTECODE), BYTECODE_BASE)
@@ -290,23 +286,29 @@ async fn do_main() -> Result<()> {
                 // contract does not exist on chain
                 None => {
                     let (_, response) = ctx
-                        .tx::<_, MsgStoreCodeResponse>(MsgStoreCode {
-                            sender: ctx.signer.to_string(),
-                            wasm_byte_code: BYTECODE_BASE_BYTECODE.to_vec(),
-                            ..Default::default()
-                        })
+                        .tx::<_, MsgStoreCodeResponse>(
+                            MsgStoreCode {
+                                sender: ctx.signer().to_string(),
+                                wasm_byte_code: BYTECODE_BASE_BYTECODE.to_vec(),
+                                ..Default::default()
+                            },
+                            "",
+                        )
                         .await
                         .context("store code")?;
 
-                    ctx.tx::<_, MsgInstantiateContract2Response>(MsgInstantiateContract2 {
-                        sender: ctx.signer.to_string(),
-                        admin: ctx.signer.to_string(),
-                        code_id: response.code_id,
-                        label: BYTECODE_BASE.to_string(),
-                        msg: b"{}".to_vec(),
-                        salt: BYTECODE_BASE.as_bytes().to_vec(),
-                        ..Default::default()
-                    })
+                    ctx.tx::<_, MsgInstantiateContract2Response>(
+                        MsgInstantiateContract2 {
+                            sender: ctx.signer().to_string(),
+                            admin: ctx.signer().to_string(),
+                            code_id: response.code_id,
+                            label: BYTECODE_BASE.to_string(),
+                            msg: b"{}".to_vec(),
+                            salt: BYTECODE_BASE.as_bytes().to_vec(),
+                            ..Default::default()
+                        },
+                        "",
+                    )
                     .await
                     .context("instantiate2")?;
 
@@ -352,12 +354,16 @@ async fn do_main() -> Result<()> {
             if let Some(_ucs00) = contracts.app.ucs00 {}
 
             if let Some(ucs03_config) = contracts.app.ucs03 {
+                // TODO: Don't store the minter every time, check if ucs03 has been stored & init'd already
                 let (tx_hash, response) = ctx
-                    .tx::<_, MsgStoreCodeResponse>(MsgStoreCode {
-                        sender: ctx.signer.to_string(),
-                        wasm_byte_code: std::fs::read(ucs03_config.token_minter_path)?,
-                        ..Default::default()
-                    })
+                    .tx::<_, MsgStoreCodeResponse>(
+                        MsgStoreCode {
+                            sender: ctx.signer().to_string(),
+                            wasm_byte_code: std::fs::read(ucs03_config.token_minter_path)?,
+                            ..Default::default()
+                        },
+                        "",
+                    )
                     .await
                     .context("store minter code")?;
 
@@ -368,11 +374,14 @@ async fn do_main() -> Result<()> {
                 let minter_init_msg = match ucs03_config.token_minter_config {
                     TokenMinterConfig::Cw20 { cw20_base } => {
                         let (tx_hash, response) = ctx
-                            .tx::<_, MsgStoreCodeResponse>(MsgStoreCode {
-                                sender: ctx.signer.to_string(),
-                                wasm_byte_code: std::fs::read(cw20_base)?,
-                                ..Default::default()
-                            })
+                            .tx::<_, MsgStoreCodeResponse>(
+                                MsgStoreCode {
+                                    sender: ctx.signer().to_string(),
+                                    wasm_byte_code: std::fs::read(cw20_base)?,
+                                    ..Default::default()
+                                },
+                                "",
+                            )
                             .await
                             .context("store minter code")?;
 
@@ -391,10 +400,10 @@ async fn do_main() -> Result<()> {
                     .deploy_and_initiate(
                         std::fs::read(ucs03_config.path)?,
                         bytecode_base_code_id,
-                        ibc_union_ucs03_zkgm::msg::InitMsg {
-                            config: ibc_union_ucs03_zkgm::msg::Config {
-                                // no constructors ffs
-                                ibc_host: unsafe { std::mem::transmute(core_address.clone()) },
+                        ucs03_zkgm::msg::InitMsg {
+                            config: ucs03_zkgm::msg::Config {
+                                admin: Addr::unchecked(ctx.signer().to_string()),
+                                ibc_host: Addr::unchecked(core_address.clone()),
                                 token_minter_code_id: code_id,
                             },
                             minter_init_msg,
@@ -408,6 +417,60 @@ async fn do_main() -> Result<()> {
 
             std::fs::write(output, serde_json::to_string(&contract_addresses).unwrap())?;
         }
+        App::InitHeights {
+            rpc_url,
+            addresses,
+            output,
+        } => {
+            let addresses = serde_json::from_slice::<ContractAddresses>(
+                &std::fs::read(addresses).context("reading addresses path")?,
+            )?;
+
+            let ctx = Deployer(Ctx::new(rpc_url, H256::default(), GasConfig::default()).await?);
+
+            let mut heights = BTreeMap::new();
+
+            for (client_type, address) in addresses.lightclient {
+                let height = ctx
+                    .contract_history(address.clone())
+                    .await??
+                    .unwrap()
+                    .entries
+                    .pop()
+                    .unwrap()
+                    .updated
+                    .unwrap()
+                    .block_height;
+
+                info!(
+                    "lightclient contract for client type \
+                    {client_type} was initiated at {height}"
+                );
+
+                heights.insert(address, height);
+            }
+
+            if let Some(_ucs00) = addresses.app.ucs00 {}
+
+            if let Some(address) = addresses.app.ucs03 {
+                let height = ctx
+                    .contract_history(address.clone())
+                    .await??
+                    .unwrap()
+                    .entries
+                    .pop()
+                    .unwrap()
+                    .updated
+                    .unwrap()
+                    .block_height;
+
+                info!("app ucs03 was initiated at {height}");
+
+                heights.insert(address, height);
+            }
+
+            std::fs::write(output, serde_json::to_string(&heights).unwrap())?;
+        }
         App::Tx(tx_cmd) => match tx_cmd {
             TxCmd::StoreCode {
                 private_key,
@@ -418,14 +481,17 @@ async fn do_main() -> Result<()> {
                 let wasm_byte_code =
                     std::fs::read(bytecode_path).context("reading bytecode path")?;
 
-                let ctx = Ctx::new(rpc_url, private_key, gas_config).await?;
+                let ctx = Deployer(Ctx::new(rpc_url, private_key, gas_config.into()).await?);
 
                 let (tx_hash, response) = ctx
-                    .tx::<_, MsgStoreCodeResponse>(MsgStoreCode {
-                        sender: ctx.signer.to_string(),
-                        wasm_byte_code: wasm_byte_code.to_vec(),
-                        ..Default::default()
-                    })
+                    .tx::<_, MsgStoreCodeResponse>(
+                        MsgStoreCode {
+                            sender: ctx.signer().to_string(),
+                            wasm_byte_code: wasm_byte_code.to_vec(),
+                            ..Default::default()
+                        },
+                        "",
+                    )
                     .await
                     .context("store code")?;
 
@@ -442,18 +508,21 @@ async fn do_main() -> Result<()> {
                 msg,
                 gas_config,
             } => {
-                let config = Ctx::new(rpc_url, private_key, gas_config).await?;
+                let deployer = Deployer(Ctx::new(rpc_url, private_key, gas_config.into()).await?);
 
-                let (tx_hash, response) = config
-                    .tx::<_, MsgInstantiateContract2Response>(MsgInstantiateContract2 {
-                        sender: config.signer.to_string(),
-                        admin: config.signer.to_string(),
-                        code_id,
-                        label: salt.to_string(),
-                        msg: msg.into_bytes(),
-                        salt: salt.as_bytes().to_vec(),
-                        ..Default::default()
-                    })
+                let (tx_hash, response) = deployer
+                    .tx::<_, MsgInstantiateContract2Response>(
+                        MsgInstantiateContract2 {
+                            sender: deployer.signer().to_string(),
+                            admin: deployer.signer().to_string(),
+                            code_id,
+                            label: salt.to_string(),
+                            msg: msg.into_bytes(),
+                            salt: salt.as_bytes().to_vec(),
+                            ..Default::default()
+                        },
+                        "",
+                    )
                     .await
                     .context("instantiate2")?;
 
@@ -514,15 +583,15 @@ async fn do_main() -> Result<()> {
     Ok(())
 }
 
-struct Ctx {
-    signer: CosmosSigner,
-    client: cometbft_rpc::Client,
-    gas_config: GasConfig,
-    chain_id: String,
-}
+// struct Ctx {
+//     signer: CosmosSigner,
+//     client: cometbft_rpc::Client,
+//     gas_config: GasConfig,
+//     chain_id: String,
+// }
 
 #[derive(Debug, Clone, PartialEq, Default, clap::Args)]
-pub struct GasConfig {
+pub struct GasConfigArgs {
     #[arg(long)]
     pub gas_price: f64,
     #[arg(long)]
@@ -535,7 +604,19 @@ pub struct GasConfig {
     pub min_gas: u64,
 }
 
-impl GasConfig {
+impl From<GasConfigArgs> for GasConfig {
+    fn from(value: GasConfigArgs) -> Self {
+        GasConfig {
+            gas_price: value.gas_price,
+            gas_denom: value.gas_denom,
+            gas_multiplier: value.gas_multiplier,
+            max_gas: value.max_gas,
+            min_gas: value.min_gas,
+        }
+    }
+}
+
+impl GasConfigArgs {
     pub fn mk_fee(&self, gas: u64) -> Fee {
         // gas limit = provided gas * multiplier, clamped between min_gas and max_gas
         let gas_limit = u128_saturating_mul_f64(gas.into(), self.gas_multiplier)
@@ -564,76 +645,24 @@ fn u128_saturating_mul_f64(u: u128, f: f64) -> u128 {
     // .expect("overflow")
 }
 
-impl Ctx {
-    async fn new(rpc_url: String, private_key: H256, gas_config: GasConfig) -> Result<Ctx> {
-        let client = cometbft_rpc::Client::new(rpc_url)
-            .await
-            .context("creating cometbft rpc client")?;
+struct Deployer(Ctx);
 
-        let prefix = client
-            .grpc_abci_query::<_, protos::cosmos::auth::v1beta1::Bech32PrefixResponse>(
-                "/cosmos.auth.v1beta1.Query/Bech32Prefix",
-                &protos::cosmos::auth::v1beta1::Bech32PrefixRequest {},
-                None,
-                false,
-            )
-            .await
-            .context("querying bech32 prefix")?
-            .into_result()?
-            .unwrap()
-            .bech32_prefix;
+impl Deref for Deployer {
+    type Target = Ctx;
 
-        let chain_id = client
-            .status()
-            .await
-            .context("querying node status")?
-            .node_info
-            .network;
-
-        let ctx = Ctx {
-            signer: CosmosSigner::new(
-                bip32::secp256k1::ecdsa::SigningKey::from_bytes(&private_key.into())
-                    .expect("invalid private key"),
-                prefix,
-            ),
-            client,
-            gas_config,
-            chain_id,
-        };
-
-        Ok(ctx)
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
+}
 
-    async fn tx<M: Message + Name, R: Message + Default + Name>(
-        &self,
-        msg: M,
-    ) -> Result<(H256, R)> {
-        let (tx_hash, result) = self
-            .broadcast_tx_commit([protos::google::protobuf::Any {
-                type_url: M::type_url(),
-                value: msg.encode_to_vec().into(),
-            }])
-            .await
-            .context("broadcast_tx_commit")?;
-
-        let response =
-            <abci::v1beta1::TxMsgData as Message>::decode(&*result.tx_result.data.unwrap())
-                .unwrap();
-
-        assert_eq!(&*response.msg_responses[0].type_url, R::type_url());
-
-        let response =
-            R::decode(&*response.msg_responses[0].value).context("parsing returned address")?;
-
-        Ok((tx_hash, response))
-    }
-
+impl Deployer {
     async fn contract_info(
         &self,
         address: String,
     ) -> Result<Option<protos::cosmwasm::wasm::v1::ContractInfo>> {
         let result = self
-            .client
+            .0
+            .client()
             .grpc_abci_query::<_, protos::cosmwasm::wasm::v1::QueryContractInfoResponse>(
                 "/cosmwasm.wasm.v1.Query/ContractInfo",
                 &(protos::cosmwasm::wasm::v1::QueryContractInfoRequest { address }),
@@ -657,8 +686,7 @@ impl Ctx {
 
     // async fn code_info(&self, code_id: u64) -> Result<Option<H256>> {
     //     let result = self
-    //         .client
-    //         .grpc_abci_query::<_, protos::cosmwasm::wasm::v1::QueryCodeInfoResponse>(
+    //         .client()    //         .grpc_abci_query::<_, protos::cosmwasm::wasm::v1::QueryCodeInfoResponse>(
     //             "/cosmwasm.wasm.v1.Query/CodeInfo",
     //             &protos::cosmwasm::wasm::v1::QueryCodeInfoRequest { code_id },
     //             None,
@@ -717,7 +745,7 @@ impl Ctx {
         >,
     > {
         Ok(self
-            .client
+            .client()
             .grpc_abci_query::<_, protos::cosmwasm::wasm::v1::QueryContractHistoryResponse>(
                 "/cosmwasm.wasm.v1.Query/ContractHistory",
                 &protos::cosmwasm::wasm::v1::QueryContractHistoryRequest {
@@ -732,7 +760,11 @@ impl Ctx {
     }
 
     async fn instantiate2_address(&self, checksum: H256, salt: &str) -> Result<String> {
-        let bech32 = self.signer.to_string().parse::<Bech32<Vec<u8>>>().unwrap();
+        let bech32 = self
+            .signer()
+            .to_string()
+            .parse::<Bech32<Vec<u8>>>()
+            .unwrap();
 
         let addr = cosmwasm_std::instantiate2_address(
             checksum.get(),
@@ -781,15 +813,18 @@ impl Ctx {
 
         if do_instantiate {
             let (_, instantiate2_response) = self
-                .tx::<_, MsgInstantiateContract2Response>(MsgInstantiateContract2 {
-                    sender: self.signer.to_string(),
-                    admin: self.signer.to_string(),
-                    code_id: bytecode_base_code_id,
-                    label: salt.clone(),
-                    msg: json!({}).to_string().into_bytes(),
-                    salt: salt.into_bytes(),
-                    ..Default::default()
-                })
+                .tx::<_, MsgInstantiateContract2Response>(
+                    MsgInstantiateContract2 {
+                        sender: self.signer().to_string(),
+                        admin: self.signer().to_string(),
+                        code_id: bytecode_base_code_id,
+                        label: salt.clone(),
+                        msg: json!({}).to_string().into_bytes(),
+                        salt: salt.into_bytes(),
+                        ..Default::default()
+                    },
+                    "",
+                )
                 .await
                 .context("instantiate2")?;
 
@@ -797,11 +832,14 @@ impl Ctx {
         }
 
         let (tx_hash, store_code_response) = self
-            .tx::<_, MsgStoreCodeResponse>(MsgStoreCode {
-                sender: self.signer.to_string(),
-                wasm_byte_code,
-                ..Default::default()
-            })
+            .tx::<_, MsgStoreCodeResponse>(
+                MsgStoreCode {
+                    sender: self.signer().to_string(),
+                    wasm_byte_code,
+                    ..Default::default()
+                },
+                "",
+            )
             .await
             .context("store code")?;
 
@@ -811,272 +849,21 @@ impl Ctx {
         );
 
         let (_, _migrate_response) = self
-            .tx::<_, MsgMigrateContractResponse>(MsgMigrateContract {
-                sender: self.signer.to_string(),
-                contract: address.clone(),
-                code_id: store_code_response.code_id,
-                msg: json!({ "init": msg }).to_string().into_bytes(),
-            })
+            .tx::<_, MsgMigrateContractResponse>(
+                MsgMigrateContract {
+                    sender: self.signer().to_string(),
+                    contract: address.clone(),
+                    code_id: store_code_response.code_id,
+                    msg: json!({ "init": msg }).to_string().into_bytes(),
+                },
+                "",
+            )
             .await
             .context("init")?;
 
         // info!(%tx_hash, );
 
         Ok(address)
-    }
-
-    /// - simulate tx
-    /// - submit tx
-    /// - wait for inclusion
-    /// - return (tx_hash, gas_used)
-    pub async fn broadcast_tx_commit(
-        &self,
-        messages: impl IntoIterator<Item = protos::google::protobuf::Any> + Clone,
-    ) -> Result<(H256, TxResponse)> {
-        let account = self
-            .account_info(&self.signer.to_string())
-            .await
-            .context("fetching account info")?;
-
-        let (tx_body, mut auth_info, simulation_gas_info) =
-            self.simulate_tx(messages).await.context("simulate_tx")?;
-
-        info!(
-            gas_used = %simulation_gas_info.gas_used,
-            gas_wanted = %simulation_gas_info.gas_wanted,
-            "tx simulation successful"
-        );
-
-        auth_info.fee = self.gas_config.mk_fee(simulation_gas_info.gas_used);
-
-        info!(
-            fee = %auth_info.fee.amount[0].amount,
-            gas_multiplier = %self.gas_config.gas_multiplier,
-            "submitting transaction with gas"
-        );
-
-        // re-sign the new auth info with the simulated gas
-        let signature = self
-            .signer
-            .try_sign(
-                &SignDoc {
-                    body_bytes: tx_body.clone().encode_as::<Proto>(),
-                    auth_info_bytes: auth_info.clone().encode_as::<Proto>(),
-                    chain_id: self.chain_id.to_string(),
-                    account_number: account.account_number,
-                }
-                .encode_as::<Proto>(),
-            )
-            .expect("signing failed")
-            .to_bytes()
-            .to_vec();
-
-        let tx_raw_bytes = TxRaw {
-            body_bytes: tx_body.clone().encode_as::<Proto>(),
-            auth_info_bytes: auth_info.clone().encode_as::<Proto>(),
-            signatures: [signature].to_vec(),
-        }
-        .encode_as::<Proto>();
-
-        let tx_hash: H256 = sha2::Sha256::new()
-            .chain_update(&tx_raw_bytes)
-            .finalize()
-            .into();
-
-        if let Ok(tx) = self.client.tx(tx_hash, false).await {
-            debug!(%tx_hash, "tx already included");
-            return Ok((tx_hash, tx));
-        }
-
-        let response = self
-            .client
-            .broadcast_tx_sync(&tx_raw_bytes)
-            .await
-            .context("broadcast_tx_sync")?;
-
-        assert_eq!(tx_hash, response.hash, "tx hash calculated incorrectly");
-
-        info!(%tx_hash);
-
-        info!(
-            check_tx_code = %response.code,
-            codespace = %response.codespace,
-            check_tx_log = %response.log
-        );
-
-        if response.code > 0 {
-            bail!(
-                "cosmos tx failed: {}, {}: {}",
-                response.code,
-                response.codespace,
-                response.log
-            );
-        };
-
-        let mut target_height = self
-            .client
-            .block(None)
-            .await
-            .context("querying latest block")?
-            .block
-            .header
-            .height;
-
-        let mut i = 0;
-        loop {
-            let reached_height = 'l: loop {
-                let current_height = self
-                    .client
-                    .block(None)
-                    .await
-                    .context("querying latest block for tx inclusion")?
-                    .block
-                    .header
-                    .height;
-
-                if current_height >= target_height {
-                    break 'l current_height;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            };
-
-            let tx_inclusion = self.client.tx(tx_hash, false).await;
-
-            // debug!(?tx_inclusion);
-
-            match tx_inclusion {
-                Ok(tx) => {
-                    if tx.tx_result.code == 0 {
-                        break Ok((tx_hash, tx));
-                    } else {
-                        bail!(
-                            "cosmos tx failed: {}, {}: {}",
-                            response.code,
-                            response.codespace,
-                            response.log
-                        );
-                    }
-                }
-                Err(err) if i > 5 => {
-                    return Err(anyhow!(
-                        "tx inclusion couldn't be retrieved after {i} attempt(s) (tx hash: {tx_hash})"
-                    )
-                    .context(err));
-                }
-                Err(_) => {
-                    debug!("unable to retrieve tx inclusion, trying again");
-                    target_height = reached_height.add(&1);
-                    i += 1;
-                    continue;
-                }
-            }
-        }
-    }
-
-    pub async fn simulate_tx(
-        &self,
-        messages: impl IntoIterator<Item = protos::google::protobuf::Any> + Clone,
-    ) -> Result<(TxBody, AuthInfo, GasInfo)> {
-        use protos::cosmos::tx;
-
-        let account = self
-            .account_info(&self.signer.to_string())
-            .await
-            .context("querying account info")?;
-
-        let tx_body = TxBody {
-            // TODO: Use RawAny here
-            messages: messages.clone().into_iter().map(Into::into).collect(),
-            memo: String::new(),
-            timeout_height: 0,
-            extension_options: vec![],
-            non_critical_extension_options: vec![],
-            unordered: false,
-            timeout_timestamp: None,
-        };
-
-        let auth_info = AuthInfo {
-            signer_infos: [SignerInfo {
-                public_key: Some(AnyPubKey::Secp256k1(secp256k1::PubKey {
-                    key: self.signer.public_key().into(),
-                })),
-                mode_info: ModeInfo::Single {
-                    mode: SignMode::Direct,
-                },
-                sequence: account.sequence,
-            }]
-            .to_vec(),
-            fee: self.gas_config.mk_fee(self.gas_config.max_gas).clone(),
-        };
-
-        let simulation_signature = self
-            .signer
-            .try_sign(
-                &SignDoc {
-                    body_bytes: tx_body.clone().encode_as::<Proto>(),
-                    auth_info_bytes: auth_info.clone().encode_as::<Proto>(),
-                    chain_id: self.chain_id.to_string(),
-                    account_number: account.account_number,
-                }
-                .encode_as::<Proto>(),
-            )
-            .expect("signing failed")
-            .to_bytes()
-            .to_vec();
-
-        let simulate_response = self
-            .client
-            .grpc_abci_query::<_, tx::v1beta1::SimulateResponse>(
-                "/cosmos.tx.v1beta1.Service/Simulate",
-                &tx::v1beta1::SimulateRequest {
-                    tx_bytes: Tx {
-                        body: tx_body.clone(),
-                        auth_info: auth_info.clone(),
-                        signatures: [simulation_signature.clone()].to_vec(),
-                    }
-                    .encode_as::<Proto>(),
-                    ..Default::default()
-                },
-                None,
-                false,
-            )
-            .await
-            .context("submitting SimulateRequest")?
-            .into_result()?;
-
-        let result = simulate_response.unwrap();
-
-        Ok((
-            tx_body,
-            auth_info,
-            result
-                .gas_info
-                .expect("gas info is present on successful simulation result")
-                .into(),
-        ))
-    }
-
-    async fn account_info(&self, account: &str) -> Result<BaseAccount> {
-        debug!(%account, "fetching account");
-
-        Ok(self
-            .client
-            .grpc_abci_query::<_, protos::cosmos::auth::v1beta1::QueryAccountResponse>(
-                "/cosmos.auth.v1beta1.Query/Account",
-                &protos::cosmos::auth::v1beta1::QueryAccountRequest {
-                    address: account.to_string(),
-                },
-                None,
-                false,
-            )
-            .await
-            .context("querying account info")?
-            .into_result()?
-            .unwrap()
-            .account
-            .map(<Any<BaseAccount>>::try_from)
-            .context("decoding account info")??
-            .0)
     }
 }
 

@@ -22,6 +22,7 @@ use unionlabs::{
     signer::CosmosSigner,
 };
 
+// TODO: Add read and write versions of this
 #[derive(Debug, Clone)]
 pub struct Ctx {
     signer: CosmosSigner,
@@ -126,7 +127,7 @@ impl Ctx {
     pub async fn tx<M: Message + Name, R: Message + Default + Name>(
         &self,
         msg: M,
-        memo: String,
+        memo: impl AsRef<str>,
     ) -> Result<(H256, R)> {
         let (tx_hash, result) = self
             .broadcast_tx_commit(
@@ -261,7 +262,7 @@ impl Ctx {
     pub async fn broadcast_tx_commit(
         &self,
         messages: impl IntoIterator<Item = protos::google::protobuf::Any> + Clone,
-        memo: String,
+        memo: impl AsRef<str>,
     ) -> Result<(H256, TxResponse)> {
         let account = self
             .account_info(&self.signer.to_string())
@@ -408,7 +409,7 @@ impl Ctx {
     pub async fn simulate_tx(
         &self,
         messages: impl IntoIterator<Item = protos::google::protobuf::Any> + Clone,
-        memo: String,
+        memo: impl AsRef<str>,
     ) -> Result<(TxBody, AuthInfo, GasInfo)> {
         use protos::cosmos::tx;
 
@@ -420,7 +421,7 @@ impl Ctx {
         let tx_body = TxBody {
             // TODO: Use RawAny here
             messages: messages.clone().into_iter().map(Into::into).collect(),
-            memo: memo.clone(),
+            memo: memo.as_ref().to_owned(),
             timeout_height: 0,
             extension_options: vec![],
             non_critical_extension_options: vec![],

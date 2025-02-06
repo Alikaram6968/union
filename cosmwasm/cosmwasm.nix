@@ -44,51 +44,25 @@
               --gas-multiplier ${toString gas_config.gas_multiplier} \
               --max-gas ${toString gas_config.max_gas} \
               --contracts ${mk-chain-deployments-json args} \
-              --rpc-url ${rpc_url}
+              --rpc-url ${rpc_url} "$@"
           '';
         };
 
-      dashesToUnderscores = builtins.replaceStrings [ "-" ] [ "_" ];
-
-      # client type => package name
+      # directory => {}
       all-lightclients = {
-        arbitrum = {
-          client_type = "arbitrum";
-          package = "arbitrum-light-client";
-        };
-        berachain = {
-          client_type = "berachain";
-          package = "berachain-light-client";
-        };
-        cometbls = {
-          client_type = "cometbls";
-          package = "cometbls-light-client";
-        };
-        ethereum = {
-          client_type = "ethereum";
-          package = "ethereum-light-client";
-        };
-        ethermint = {
-          client_type = "ethermint";
-          package = "ethermint-light-client";
-        };
-        tendermint = {
-          client_type = "tendermint";
-          package = "tendermint-light-client";
-        };
-        movement = {
-          client_type = "movement";
-          package = "movement-light-client";
-        };
-        state-lens-ics23-mpt = {
-          client_type = "state-lens/ics23/mpt";
-          package = "state-lens-ics23-mpt-light-client";
-        };
+        arbitrum = { };
+        berachain = { };
+        cometbls = { };
+        ethereum = { };
+        # ethermint = {};
+        tendermint = { };
+        movement = { };
+        state-lens-ics23-mpt = { };
       };
 
       ucs03-configs = {
         cw20 = {
-          path = "${self'.packages.ibc-union-ucs03-zkgm}";
+          path = "${self'.packages.ucs03-zkgm}";
           token_minter_path = "${self'.packages.cw20-token-minter}";
           token_minter_config = {
             cw20 = {
@@ -100,7 +74,7 @@
           };
         };
         native = {
-          path = "${self'.packages.ibc-union-ucs03-zkgm}";
+          path = "${self'.packages.ucs03-zkgm}";
           token_minter_path = "${self'.packages.token-factory-minter}";
           token_minter_config = {
             native = { };
@@ -122,10 +96,10 @@
         { lightclients, apps, ... }:
         pkgs.writeText "contracts.json" (
           builtins.toJSON {
-            core = "${self'.packages.ibc-union}/lib/ibc_union.wasm";
-            lightclient = pkgs.lib.mapAttrs (
-              _: value: "${self'.packages.${value.package}}/lib/${dashesToUnderscores value.package}.wasm"
-            ) (pkgs.lib.filterAttrs (n: _: builtins.elem n lightclients) all-lightclients);
+            core = ibc-union;
+            lightclient = pkgs.lib.mapAttrs (n: _: mk-lightclient n) (
+              pkgs.lib.filterAttrs (n: _: builtins.elem n lightclients) all-lightclients
+            );
             app = apps;
           }
         );
@@ -196,13 +170,13 @@
         dir:
         (crane.buildWasmContract {
           crateDirFromRoot = "cosmwasm/ibc-union/lightclient/${dir}";
-        }).packages;
+        });
 
       mk-app =
         dir:
         (crane.buildWasmContract {
           crateDirFromRoot = "cosmwasm/ibc-union/app/${dir}";
-        }).packages;
+        });
 
       # ucs00-pingpong = crane.buildWasmContract {
       #   crateDirFromRoot = "cosmwasm/ucs00-pingpong";
@@ -215,7 +189,7 @@
         contractFileNameWithoutExt = "cw721_base";
       };
 
-      ibc-union-ucs03-zkgm = crane.buildWasmContract {
+      ucs03-zkgm = crane.buildWasmContract {
         crateDirFromRoot = "cosmwasm/ibc-union/app/ucs03-zkgm";
       };
 
@@ -238,7 +212,15 @@
     {
       packages =
         {
-          inherit bytecode-base cw721-base;
+          inherit
+            bytecode-base
+            cw721-base
+            ucs03-zkgm
+            native-token-minter
+            cw20-token-minter
+            ibc-union
+            multicall
+            ;
           # all-deployments-json = mk-all-deployments-json;cosmwasm-ibc-union-addresses;
           cosmwasm-scripts =
             (
@@ -263,13 +245,15 @@
             )
             // derivation { };
         }
-        // ibc-union-ucs03-zkgm.packages
         // cosmwasm-deployer.packages
-        // native-token-minter.packages
-        // cw20-token-minter.packages
-        // ibc-union.packages
-        // multicall.packages
-        // (builtins.foldl' (x: y: x // y) { } (map mk-lightclient (builtins.attrNames all-lightclients)))
-        // (builtins.foldl' (x: y: x // y) { } (map mk-app (builtins.attrNames all-apps)));
+        //
+          # all light clients
+          (pkgs.lib.mapAttrs' (n: _v: rec {
+            name = dbg value.passthru.packageName;
+            value = mk-lightclient n;
+          }) all-lightclients)
+        //
+          # all apps
+          (builtins.foldl' (x: y: x // y) { } (map mk-app (builtins.attrNames all-apps)));
     };
 }
