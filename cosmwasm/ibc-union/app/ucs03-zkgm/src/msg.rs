@@ -71,3 +71,17 @@ pub enum EurekaMsg {
 
 #[cw_serde]
 pub struct MigrateMsg {}
+
+#[cw_serde]
+pub enum QueryMsg {
+    PredictWrappedToken {
+        path: String,
+        channel: u32,
+        token: Bytes,
+    },
+}
+
+#[cw_serde]
+pub struct PredictWrappedTokenResponse {
+    pub wrapped_token: Bytes,
+}
